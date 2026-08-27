@@ -1,0 +1,47 @@
+# LiveKit server deployment for Amazon Linux (Docker Compose).
+#
+# The image is built on this host from the source tree in this directory
+# (see Dockerfile). Runtime config is read from /etc/livekit/config.yaml
+# on the host and mounted read-only -- it is never baked into the image.
+#
+#   docker compose build --pull     # rebuild after pulling new code
+#   docker compose up -d            # start / restart with the new image
+#
+# Host networking is used on purpose: LiveKit needs the whole UDP range
+# 50000-60000 for WebRTC media, and publishing 10k ports through docker-proxy
+# is prohibitively slow. Open 7880/tcp, 7881/tcp and 50000-60000/udp in the
+# EC2 security group.
+#
+# Redis is external (ElastiCache) and configured in config.yaml, so no redis
+# container is defined here.
+
+services:
+  livekit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: livekit-server:local
+    container_name: livekit-server
+    restart: unless-stopped
+    network_mode: host
+
+    # LiveKit only logs to stderr, so stderr is appended to a file on the host
+    # for logrotate to manage (see /etc/logrotate.livekit.conf).
+    # `exec` keeps livekit-server as PID 1 so it still receives SIGTERM directly
+    # and can drain rooms on shutdown. Append mode (>>) is what makes logrotate's
+    # copytruncate safe.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - exec /livekit-server --config /etc/livekit/config.yaml >> /apps/applogs/common/livekit.log 2>&1
+
+    volumes:
+      - /etc/livekit:/etc/livekit:ro
+      - /apps/applogs/common:/apps/applogs/common
+
+    # Application logs go to the file above; this only catches early crash
+    # output from before the redirect takes effect, so the cap is small.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
